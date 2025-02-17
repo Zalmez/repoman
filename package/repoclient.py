@@ -52,7 +52,7 @@ class GithubRepoClient:
         Parameters:
         org_or_user (str): The name of the organization or user.
         repositories (list): A list of repositories to be created.
-        repo_visibility (str): The visibility of the repositories (e.g., 'public' or 'private').
+        repo_visibility (str): The visibility of the repositories (e.g., 'private','internal' or 'public').
         branch_protection_payload (dict): The payload for branch protection.
         """
         if branch_protection_payload is None:
@@ -81,7 +81,12 @@ class GithubRepoClient:
             }
         base_url = f"https://api.github.com/orgs/{org_or_user}/repos"
         existing_repositories = self.get_existing_repositories(org_or_user)
-
+        if(repo_visibility == "internal"):
+            base_url = f"https://api.github.com/orgs/{org_or_user}"
+            response = requests.get(base_url, headers=self.headers)
+            if response.status_code == 404:
+                logging.WARNING(f"User {org_or_user} does not exist. Changing visibility to private")
+                repo_visibility = "private"
         for repo in repositories:
             logging.info(repo)
             repo_name = repo['repo_name']
@@ -97,7 +102,7 @@ class GithubRepoClient:
                     "visibility": repo_visibility,
                     "auto_init": repo.get("auto_init", True)
                 }
-
+                    
                 response = requests.post(base_url, headers=self.headers, json=repo_payload)
                 if response.status_code == 201:
                     logging.info(f"Repository '{repo_name}' created successfully.")
@@ -119,6 +124,7 @@ class GithubRepoClient:
         repositories (list): A list of repositories to be created.
         template_owner (str): The owner of the template repository.
         template_repo (str): The name of the template repository.
+        repo_visibility (str): The visibility of the repositories (e.g., 'private','internal' or 'public').
         branch_protection_payload (dict): The payload for branch protection.
         """
         if branch_protection_payload is None:
@@ -145,9 +151,24 @@ class GithubRepoClient:
                 "lock_branch": False,
                 "allow_fork_syncing": False
             }
-        base_url = f"https://api.github.com/repos/{org_or_user}/{template_repo}/generate"
+        base_url = f"https://api.github.com/repos/{org_or_user}/{template_repo}"
+        template_response = requests.get(base_url, headers=self.headers)
+        template_data = template_response.json()
+        if template_data.get("is_template") == False:
+            logging.error(f"Repository '{template_repo}' is not a template repository.")
+            return
+        if template_response.status_code != 200:
+            logging.error(f"Failed to retrieve template repository '{template_repo}'. Status code: {template_response.status_code}")
+            logging.error(template_response.text)
+            return
+        base_url = f"{base_url}/generate"
         existing_repositories = self.get_existing_repositories(org_or_user)
-
+        if(repo_visibility == "internal"):
+            org_url = f"https://api.github.com/orgs/{org_or_user}"
+            response = requests.get(org_url, headers=self.headers)
+            if response.status_code == 404:
+                logging.warning(f"{org_or_user} does not seem to be an organization. Changing visibility to private due to github constraints")
+                repo_visibility = "private"
         for repo in repositories:
             repo_name = repo['repo_name']
             repo_description = repo.get('description', None)
@@ -156,21 +177,32 @@ class GithubRepoClient:
                 logging.info(f"Repository '{repo_name}' already exists. Skipping creation.")
             else:
                 repo_payload = {
+                    "owner": org_or_user,
                     "name": repo_name,
                     "description": repo_description,
                     "private": True,
-                    "visibility": repo_visibility
                 }
-
+                
                 response = requests.post(base_url, headers=self.headers, json=repo_payload)
                 if response.status_code == 201:
                     logging.info(f"Repository '{repo_name}' created successfully.")
+                    if(repo_visibility == "internal"):
+                        repo_settings_url = f"https://api.github.com/repos/{org_or_user}/{repo_name}"
+                        repo_settings_payload = {
+                            "visibility": "internal"
+                        }
+                        settings_response = requests.patch(repo_settings_url, headers=self.headers, json=repo_settings_payload)
+                        if settings_response.status_code == 200:
+                            logging.info(f"Repository '{repo_name}' visibility updated to internal.")
+                        else:
+                            logging.error(f"Failed to update visibility for repository '{repo_name}'. Status code: {settings_response.status_code}")
+                            logging.error(settings_response.text)
                 else:
                     logging.error(f"Failed to create repository '{repo_name}'. Status code: {response.status_code}")
                     logging.error(response.text)
-
+                
                 self.enable_vuln_alerts(org_or_user, repo_name)
-                self.enable_automated_fixes
+                self.enable_automated_fixes(org_or_user, repo_name)
 
     def enable_vuln_alerts(self, org_or_user, repo_name):
         """
