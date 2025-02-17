@@ -45,13 +45,14 @@ class GithubRepoClient:
                 break
         return existing_repositories
 
-    def create_repos(self, org_or_user, repositories, branch_protection_payload=None):
+    def create_repos(self, org_or_user, repositories, repo_visibility="private", branch_protection_payload=None):
         """
         Create repositories for a specified organization or user.
         
         Parameters:
         org_or_user (str): The name of the organization or user.
         repositories (list): A list of repositories to be created.
+        repo_visibility (str): The visibility of the repositories (e.g., 'public' or 'private').
         branch_protection_payload (dict): The payload for branch protection.
         """
         if branch_protection_payload is None:
@@ -93,7 +94,7 @@ class GithubRepoClient:
                     "name": repo_name,
                     "description": repo_description,
                     "private": True,
-                    "visibility": "private",
+                    "visibility": repo_visibility,
                     "auto_init": repo.get("auto_init", True)
                 }
 
@@ -108,6 +109,68 @@ class GithubRepoClient:
                 self.enable_automated_fixes(org_or_user, repo_name)
                 if repo.get('branch_protection', True):
                     self.enable_branch_protection(org_or_user, repo_name, branch_protection_payload)
+
+    def create_repos_from_template(self, org_or_user, repositories, template_repo, repo_visibility="private", branch_protection_payload=None):
+        """
+        Create repositories for a specified organization or user from a template repository.
+        
+        Parameters:
+        org_or_user (str): The name of the organization or user.
+        repositories (list): A list of repositories to be created.
+        template_owner (str): The owner of the template repository.
+        template_repo (str): The name of the template repository.
+        branch_protection_payload (dict): The payload for branch protection.
+        """
+        if branch_protection_payload is None:
+            branch_protection_payload = {
+                "required_status_checks": None,
+                "enforce_admins": True,
+                "required_pull_request_reviews": {
+                    "dismissal_restrictions": {},
+                    "dismiss_stale_reviews": True,
+                    "require_code_owner_reviews": False,
+                    "required_approving_review_count": 1,
+                    "require_last_push_approval": True,
+                    "bypass_pull_request_allowances": {
+                        "users": [],
+                        "teams": []
+                    }
+                },
+                "restrictions": None,
+                "required_linear_history": True,
+                "allow_force_pushes": False,
+                "allow_deletions": False,
+                "block_creations": True,
+                "required_conversation_resolution": True,
+                "lock_branch": False,
+                "allow_fork_syncing": False
+            }
+        base_url = f"https://api.github.com/repos/{org_or_user}/{template_repo}/generate"
+        existing_repositories = self.get_existing_repositories(org_or_user)
+
+        for repo in repositories:
+            repo_name = repo['repo_name']
+            repo_description = repo.get('description', None)
+
+            if repo_name in existing_repositories:
+                logging.info(f"Repository '{repo_name}' already exists. Skipping creation.")
+            else:
+                repo_payload = {
+                    "name": repo_name,
+                    "description": repo_description,
+                    "private": True,
+                    "visibility": repo_visibility
+                }
+
+                response = requests.post(base_url, headers=self.headers, json=repo_payload)
+                if response.status_code == 201:
+                    logging.info(f"Repository '{repo_name}' created successfully.")
+                else:
+                    logging.error(f"Failed to create repository '{repo_name}'. Status code: {response.status_code}")
+                    logging.error(response.text)
+
+                self.enable_vuln_alerts(org_or_user, repo_name)
+                self.enable_automated_fixes
 
     def enable_vuln_alerts(self, org_or_user, repo_name):
         """
